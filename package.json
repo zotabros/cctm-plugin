@@ -1,0 +1,21 @@
+{
+  "name": "cctm-plugin",
+  "version": "0.2.0",
+  "description": "Local-first Claude Code telemetry plugin (worker + dashboard).",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node worker/index.mjs",
+    "test": "node --test test",
+    "lint": "for f in scripts/*.cjs worker/*.mjs shared/*.mjs; do node --check \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "better-sqlite3": "^11.3.0",
+    "undici": "^6.20.0",
+    "zod": "^3.23.8"
+  }
+}

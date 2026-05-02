@@ -1,0 +1,171 @@
+// CCTM local-first SQLite schema. Used by the embedded webapp via Prisma Client.
+// The worker uses raw SQL (prisma/migrations/0001_init.sql) at runtime — keep both in sync.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("CCTM_DB_URL")
+}
+
+model Account {
+  id          String  @id
+  claudeEmail String?
+  label       String
+  color       String  @default("#B4490B")
+
+  projects Project[]
+
+  @@unique([claudeEmail])
+}
+
+model Project {
+  id        String  @id
+  accountId String
+  cwdPath   String
+  name      String
+
+  account  Account   @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  sessions Session[]
+
+  @@unique([accountId, cwdPath])
+  @@index([accountId])
+}
+
+model Session {
+  id          String    @id
+  projectId   String
+  sessionUuid String    @unique
+  startedAt   DateTime
+  endedAt     DateTime?
+  model       String?
+
+  project     Project      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  usageEvents UsageEvent[]
+  turns       Turn[]
+  cursor      SessionCursor?
+
+  @@index([projectId])
+}
+
+model UsageEvent {
+  id                  String   @id
+  sessionId           String
+  ts                  DateTime
+  role                String
+  model               String
+  inputTokens         Int      @default(0)
+  outputTokens        Int      @default(0)
+  cacheCreationTokens Int      @default(0)
+  cacheReadTokens     Int      @default(0)
+  toolCallsJson       String?  // JSON-serialized
+  costUsd             Float    @default(0)
+
+  accountId String
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, ts, role])
+  @@index([sessionId, ts])
+  @@index([accountId, ts])
+}
+
+model MachineInventory {
+  id         String   @id
+  capturedAt DateTime
+  hash       String   @unique
+  payload    String   // JSON-serialized
+  createdAt  DateTime @default(now())
+
+  @@index([capturedAt])
+}
+
+model AdvisorFinding {
+  id         String    @id
+  category   String
+  ruleId     String    @unique
+  severity   String
+  title      String
+  body       String?
+  payload    String?
+  detectedAt DateTime  @default(now())
+  resolvedAt DateTime?
+
+  @@index([category])
+  @@index([detectedAt])
+}
+
+model Turn {
+  id                     String    @id
+  sessionId              String
+  ordinal                Int
+  promptStartedAt        DateTime
+  promptEndedAt          DateTime?
+  latencyMs              Int?
+  userPromptHash         String
+  userPromptPreview      String
+  totalInputTokens       Int       @default(0)
+  totalOutputTokens      Int       @default(0)
+  totalCacheReadTokens   Int       @default(0)
+  totalCacheWriteTokens  Int       @default(0)
+  totalCostUsd           Float     @default(0)
+  reconciledAt           DateTime?
+
+  session     Session          @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  toolCalls   ToolInvocation[]
+  subagents   SubagentSpan[]
+
+  @@unique([sessionId, ordinal])
+  @@index([sessionId, promptStartedAt])
+}
+
+model ToolInvocation {
+  id                       String    @id
+  turnId                   String
+  toolUseId                String    @unique
+  toolName                 String
+  mcpServer                String?
+  mcpToolName              String?
+  startedAt                DateTime
+  endedAt                  DateTime?
+  durationMs               Int?
+  success                  Boolean?
+  errorPreview             String?
+  attributedInputTokens    Int       @default(0)
+  attributedOutputTokens   Int       @default(0)
+  attributedCostUsd        Float     @default(0)
+
+  turn Turn @relation(fields: [turnId], references: [id], onDelete: Cascade)
+
+  @@index([turnId])
+  @@index([toolName])
+  @@index([mcpServer])
+}
+
+model SubagentSpan {
+  id                     String    @id
+  turnId                 String
+  agentId                String
+  agentType              String
+  startedAt              DateTime
+  endedAt                DateTime?
+  attributedInputTokens  Int       @default(0)
+  attributedOutputTokens Int       @default(0)
+  attributedCostUsd      Float     @default(0)
+
+  turn Turn @relation(fields: [turnId], references: [id], onDelete: Cascade)
+
+  @@index([turnId])
+  @@index([agentType])
+}
+
+model SessionCursor {
+  sessionId      String   @id
+  transcriptPath String
+  byteOffset     Int      @default(0)
+  updatedAt      DateTime @updatedAt
+
+  session Session @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+}
