@@ -1,5 +1,5 @@
 {
-  "name": "local",
+  "name": "cctm",
   "description": "Local-first Claude Code telemetry plugin",
   "plugins": [
     {
