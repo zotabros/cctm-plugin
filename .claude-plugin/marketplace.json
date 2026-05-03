@@ -1,6 +1,10 @@
 {
   "name": "cctm",
   "description": "Local-first Claude Code telemetry plugin",
+  "owner": {
+    "name": "zotabros",
+    "url": "https://github.com/zotabros"
+  },
   "plugins": [
     {
       "name": "cctm",
