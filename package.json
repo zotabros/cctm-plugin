@@ -1,6 +1,6 @@
 {
   "name": "cctm-plugin",
-  "version": "0.2.6",
+  "version": "0.2.7",
   "description": "Local-first Claude Code telemetry plugin (worker + dashboard).",
   "type": "module",
   "private": true,

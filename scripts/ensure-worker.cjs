@@ -53,13 +53,37 @@ function probe(port, cb) {
   req.end();
 }
 
-function pidAlive() {
+function readPid() {
+  try { return Number(fs.readFileSync(PID_FILE, 'utf8').trim()) || 0; } catch (_) { return 0; }
+}
+
+function pidAlive(pid = readPid()) {
   try {
-    const pid = Number(fs.readFileSync(PID_FILE, 'utf8').trim());
     if (!pid) return false;
     process.kill(pid, 0);
     return true;
   } catch (_) { return false; }
+}
+
+function pidCommand(pid) {
+  const res = spawnSync('ps', ['-p', String(pid), '-o', 'command='], { encoding: 'utf8' });
+  return res.status === 0 ? String(res.stdout || '').trim() : '';
+}
+
+function workerMatchesCurrentPlugin() {
+  const pid = readPid();
+  if (!pidAlive(pid)) return false;
+  const cmd = pidCommand(pid);
+  if (!cmd.includes(path.join('worker', 'index.mjs'))) return false;
+  return cmd.includes(WORKER_ENTRY);
+}
+
+function stopPid(pid) {
+  if (!pidAlive(pid)) return;
+  try { process.kill(pid, 'SIGTERM'); } catch (_) {}
+  const deadline = Date.now() + 1500;
+  while (pidAlive(pid) && Date.now() < deadline) {}
+  if (pidAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch (_) {} }
 }
 
 function spawnWorker() {
@@ -84,9 +108,16 @@ function waitHealthy(port, deadline, done) {
 }
 
 ensureDir();
-const port = readPort();
+let port = readPort();
+const pid = readPid();
+if (pidAlive(pid) && !workerMatchesCurrentPlugin()) {
+  stopPid(pid);
+  try { fs.unlinkSync(PID_FILE); } catch (_) {}
+  try { fs.unlinkSync(PORT_FILE); } catch (_) {}
+  port = readPort();
+}
 probe(port, (alive) => {
-  if (alive) { process.exit(0); return; }
+  if (alive && workerMatchesCurrentPlugin()) { process.exit(0); return; }
   if (!pidAlive()) {
     if (!ensureDeps()) { process.exit(0); return; }
     spawnWorker();
