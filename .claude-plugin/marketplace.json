@@ -1,13 +1,13 @@
 {
-  "name": "cctm",
-  "description": "Local-first Claude Code telemetry plugin",
+  "name": "zotabros",
+  "description": "zotabros's Claude Code plugins",
   "owner": {
     "name": "zotabros",
     "url": "https://github.com/zotabros"
   },
   "plugins": [
     {
-      "name": "zotabros",
+      "name": "cctm",
       "version": "0.2.0",
       "description": "Local-first Claude Code telemetry plugin: per-turn token & cost analytics, no cloud.",
       "author": "zotabros",

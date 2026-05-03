@@ -1,5 +1,5 @@
 {
-  "name": "zotabros",
+  "name": "cctm",
   "version": "0.2.0",
   "description": "Local-first Claude Code telemetry plugin: per-turn token & cost analytics, no cloud.",
   "author": {
