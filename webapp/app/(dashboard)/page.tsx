@@ -46,7 +46,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
       prisma.account.count(),
     ]);
 
-  const sparkValues = metrics.sparkline30d.map((p) => p.tokens);
+  const sparkValues = metrics.sparkline30d.map((p: { tokens: number }) => p.tokens);
   const subtitle = `${rangeLabel(range)} · ${accountCount} accounts · local`;
 
   return (
