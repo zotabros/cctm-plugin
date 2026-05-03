@@ -1,2 +1,6 @@
+packages:
+  - '.'
+  - 'webapp'
+
 onlyBuiltDependencies:
   - better-sqlite3

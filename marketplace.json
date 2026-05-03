@@ -2,7 +2,7 @@
   "name": "cctm",
   "displayName": "CCTM",
   "description": "Local-first token & cost analytics for Claude Code. Per-turn telemetry, per-tool cost attribution, MCP/subagent breakdown, embedded SQLite + Next.js dashboard. No cloud, no pairing.",
-  "version": "0.2.14",
+  "version": "0.2.15",
   "homepage": "https://github.com/zotabros/cctm-plugin",
   "repository": "https://github.com/zotabros/cctm-plugin",
   "categories": ["telemetry", "analytics", "productivity"],
