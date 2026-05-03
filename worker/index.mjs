@@ -11,7 +11,7 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync, cpSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync, cpSync, unlinkSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -32,6 +32,7 @@ const CCTM_DIR = join(homedir(), '.cctm');
 const PORT_FILE = join(CCTM_DIR, 'worker.port');
 const PID_FILE = join(CCTM_DIR, 'worker.pid');
 const ERR_LOG = join(CCTM_DIR, 'hook-errors.log');
+const WEBAPP_PID_FILE = join(CCTM_DIR, 'webapp.pid');
 const PORT_RANGE = [39636, 39646];
 const DEFAULT_PORT = Number(process.env.CCTM_PORT) || 39636;
 
@@ -497,9 +498,31 @@ async function runBackfill(rootPath) {
 
 // ---------- Webapp supervisor ----------
 
+function processAlive(pid) {
+  try { process.kill(pid, 0); return true; } catch (_) { return false; }
+}
+
+function killProcess(pid) {
+  if (!pid || !processAlive(pid)) return;
+  try { process.kill(pid, 'SIGTERM'); } catch (_) {}
+  setTimeout(() => {
+    if (processAlive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch (_) {} }
+  }, 500).unref();
+}
+
+function stopWebappProcess() {
+  if (webappState.proc) killProcess(webappState.proc.pid);
+  try { killProcess(Number(readFileSync(WEBAPP_PID_FILE, 'utf8').trim())); } catch (_) {}
+  try { unlinkSync(WEBAPP_PID_FILE); } catch (_) {}
+  webappState.proc = null;
+  webappState.port = null;
+}
+
 function startWebapp(opts, res) {
   if (webappState.proc) return send(res, 200, { ok: true, port: webappState.port, alreadyRunning: true });
   const port = Number(opts?.port) || Number(process.env.CCTM_WEBAPP_PORT) || 3636;
+  try { killProcess(Number(readFileSync(WEBAPP_PID_FILE, 'utf8').trim())); } catch (_) {}
+
   // Next 15 standalone places server.js under standalone/<source-dir>/server.js
   const candidates = [
     join(PLUGIN_ROOT, 'webapp', '.next', 'standalone', 'webapp', 'server.js'),
@@ -523,13 +546,17 @@ function startWebapp(opts, res) {
   });
   webappState.proc = child;
   webappState.port = port;
-  child.on('exit', () => { webappState.proc = null; webappState.port = null; });
+  try { writeFileSync(WEBAPP_PID_FILE, String(child.pid)); } catch (_) {}
+  child.on('exit', () => {
+    webappState.proc = null;
+    webappState.port = null;
+    try { unlinkSync(WEBAPP_PID_FILE); } catch (_) {}
+  });
   send(res, 200, { ok: true, port });
 }
 
 function stopWebapp(res) {
-  if (webappState.proc) { try { webappState.proc.kill(); } catch (_) {} }
-  webappState.proc = null; webappState.port = null;
+  stopWebappProcess();
   send(res, 200, { ok: true });
 }
 
