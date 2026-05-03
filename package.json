@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "node worker/index.mjs",
     "test": "node --test test",
-    "lint": "for f in scripts/*.cjs worker/*.mjs shared/*.mjs; do node --check \"$f\" || exit 1; done"
+    "lint": "for f in scripts/*.cjs worker/*.mjs shared/*.mjs; do node --check \"$f\" || exit 1; done",
+    "bump": "node scripts/bump-version.cjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.0.0",

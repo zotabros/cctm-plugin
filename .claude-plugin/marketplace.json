@@ -17,7 +17,14 @@
       },
       "description": "Local-first Claude Code telemetry plugin: per-turn token & cost analytics, no cloud.",
       "category": "telemetry",
-      "tags": ["telemetry", "analytics", "tokens", "cost", "local-first", "sqlite"]
+      "tags": [
+        "telemetry",
+        "analytics",
+        "tokens",
+        "cost",
+        "local-first",
+        "sqlite"
+      ]
     }
   ]
 }

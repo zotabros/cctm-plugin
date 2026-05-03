@@ -5,8 +5,19 @@
   "version": "0.2.15",
   "homepage": "https://github.com/zotabros/cctm-plugin",
   "repository": "https://github.com/zotabros/cctm-plugin",
-  "categories": ["telemetry", "analytics", "productivity"],
+  "categories": [
+    "telemetry",
+    "analytics",
+    "productivity"
+  ],
   "license": "MIT",
   "author": "zotabros",
-  "keywords": ["telemetry", "analytics", "tokens", "cost", "local-first", "sqlite"]
+  "keywords": [
+    "telemetry",
+    "analytics",
+    "tokens",
+    "cost",
+    "local-first",
+    "sqlite"
+  ]
 }
