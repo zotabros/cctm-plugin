@@ -3,9 +3,51 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { openReader } from './db.mjs';
+import { existsSync, readFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
+import { openReader, openWriter, migrate, ensureLocalAccount, defaultDbPath } from './db.mjs';
+import { PLUGIN_VERSION, PLUGIN_NAME } from '../shared/version.mjs';
 
-const db = openReader();
+const STAMP_FILE = join(homedir(), '.cctm', 'worker.stamp');
+
+// Tolerant DB open — covers fresh install where MCP starts before worker has
+// migrated the database. Polls briefly for the worker to bootstrap; if still
+// missing, runs migrate ourselves so we can answer queries (with empty rows).
+function openReaderTolerant() {
+  const dbPath = defaultDbPath();
+  const deadline = Date.now() + 3000;
+  while (!existsSync(dbPath) && Date.now() < deadline) {
+    const buf = new SharedArrayBuffer(4);
+    const i32 = new Int32Array(buf);
+    Atomics.wait(i32, 0, 0, 100);
+  }
+  if (!existsSync(dbPath)) {
+    try {
+      const w = openWriter(dbPath);
+      migrate(w);
+      ensureLocalAccount(w);
+      w.close();
+    } catch (e) {
+      console.error(`[cctm-mcp] could not bootstrap DB: ${e.message}`);
+    }
+  }
+  return openReader(dbPath);
+}
+
+const db = openReaderTolerant();
+
+// Self-exit on plugin version drift. Claude Code respawns the stdio server
+// with the new code; the user keeps working.
+setInterval(() => {
+  try {
+    const s = JSON.parse(readFileSync(STAMP_FILE, 'utf8'));
+    if (s.version && s.version !== PLUGIN_VERSION) {
+      console.error(`[cctm-mcp] version drift (${PLUGIN_VERSION} → ${s.version}), exiting`);
+      process.exit(0);
+    }
+  } catch (_) {}
+}, 30_000).unref();
 
 const TOOLS = [
   {
@@ -50,7 +92,7 @@ function rangeStart(range) {
 
 function ok(rows) { return { content: [{ type: 'text', text: JSON.stringify(rows, null, 2) }] }; }
 
-const server = new Server({ name: 'cctm', version: '0.2.0' }, { capabilities: { tools: {} } });
+const server = new Server({ name: PLUGIN_NAME, version: PLUGIN_VERSION }, { capabilities: { tools: {} } });
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: TOOLS }));
 

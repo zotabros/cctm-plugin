@@ -11,7 +11,7 @@ import http from 'node:http';
 import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync, cpSync, unlinkSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync, readdirSync, statSync, cpSync, unlinkSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -19,6 +19,7 @@ import { openWriter, migrate, ensureLocalAccount, defaultDbPath } from './db.mjs
 import { setCursor, getCursor } from './cursor.mjs';
 import { parseJsonlLine } from './parser.mjs';
 import { computeCost } from '../shared/pricing.mjs';
+import { PLUGIN_VERSION } from '../shared/version.mjs';
 import { collectInventory } from './inventory.mjs';
 import { scheduleReconcile } from './reconcile.mjs';
 
@@ -31,11 +32,23 @@ const PLUGIN_ROOT = dirname(HERE);
 const CCTM_DIR = join(homedir(), '.cctm');
 const PORT_FILE = join(CCTM_DIR, 'worker.port');
 const PID_FILE = join(CCTM_DIR, 'worker.pid');
+const STAMP_FILE = join(CCTM_DIR, 'worker.stamp');
 const ERR_LOG = join(CCTM_DIR, 'hook-errors.log');
 const WEBAPP_PID_FILE = join(CCTM_DIR, 'webapp.pid');
 const WEBAPP_BUILD_LOG = join(CCTM_DIR, 'webapp-build.log');
+const WEBAPP_BUILD_LOCK = join(CCTM_DIR, 'webapp.build.lock');
 const PORT_RANGE = [39636, 39646];
 const DEFAULT_PORT = Number(process.env.CCTM_PORT) || 39636;
+
+// Code hash — bumps whenever any of the worker source files change. Used by
+// scripts/ensure-worker.cjs to detect that a running worker is from old code.
+const CODE_HASH = (() => {
+  const h = createHash('sha256');
+  for (const f of ['index.mjs', 'db.mjs', 'mcp.mjs', 'reconcile.mjs', 'attribution.mjs', 'parser.mjs']) {
+    try { h.update(readFileSync(join(HERE, f))); } catch (_) {}
+  }
+  return h.digest('hex').slice(0, 16);
+})();
 
 mkdirSync(CCTM_DIR, { recursive: true });
 const db = openWriter();
@@ -80,7 +93,14 @@ function send(res, status, body) {
 }
 
 const ROUTES = {
-  'GET /healthz': (req, res) => send(res, 200, { ok: true, version: '0.2.0', port: state.port }),
+  'GET /healthz': (req, res) => send(res, 200, {
+    ok: true,
+    version: PLUGIN_VERSION,
+    codeHash: CODE_HASH,
+    pid: process.pid,
+    port: state.port,
+    startedAt: state.startedAt,
+  }),
   'GET /api/status': (req, res) => {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const rows = db.prepare(`
@@ -151,6 +171,13 @@ async function handle(req, res) {
   }
   if (url.pathname === '/webapp/stop' && req.method === 'POST') {
     return stopWebapp(res);
+  }
+  if (url.pathname === '/webapp/build-async' && req.method === 'POST') {
+    return buildWebappAsync(res);
+  }
+  if (url.pathname === '/webapp/status' && req.method === 'GET') {
+    const v = validateWebappBuild();
+    return send(res, 200, { running: !!webappState.proc, port: webappState.port, validation: v });
   }
   send(res, 404, { error: 'not found' });
 }
@@ -519,7 +546,7 @@ function stopWebappProcess() {
   webappState.port = null;
 }
 
-function findWebappEntry() {
+function findWebappEntryPath() {
   const candidates = [
     join(PLUGIN_ROOT, 'webapp', '.next', 'standalone', 'webapp', 'server.js'),
     join(PLUGIN_ROOT, 'webapp', '.next', 'standalone', 'server.js'),
@@ -527,12 +554,88 @@ function findWebappEntry() {
   return candidates.find((p) => existsSync(p));
 }
 
+const WEBAPP_SRC_ROOTS = ['app', 'components', 'lib', 'prisma', 'public', 'styles'];
+const WEBAPP_SRC_FILES = ['package.json', 'next.config.ts', 'next.config.mjs', 'tailwind.config.ts', 'postcss.config.mjs'];
+
+function collectWebappSources() {
+  const root = join(PLUGIN_ROOT, 'webapp');
+  const out = [];
+  const walk = (dir) => {
+    let entries;
+    try { entries = readdirSync(dir, { withFileTypes: true }); } catch (_) { return; }
+    for (const e of entries) {
+      if (e.name === 'node_modules' || e.name === '.next' || e.name.startsWith('.')) continue;
+      const p = join(dir, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.isFile()) out.push(p);
+    }
+  };
+  for (const d of WEBAPP_SRC_ROOTS) walk(join(root, d));
+  for (const f of WEBAPP_SRC_FILES) {
+    const p = join(root, f);
+    if (existsSync(p)) out.push(p);
+  }
+  out.sort();
+  return out;
+}
+
+function webappBuildStamp() {
+  const files = collectWebappSources();
+  const h = createHash('sha256');
+  for (const f of files) {
+    h.update(f.slice(PLUGIN_ROOT.length));
+    try { h.update(readFileSync(f)); } catch (_) {}
+  }
+  return { version: PLUGIN_VERSION, sourceHash: h.digest('hex').slice(0, 16) };
+}
+
+function validateWebappBuild() {
+  const entry = findWebappEntryPath();
+  if (!entry) return { ok: false, reason: 'missing' };
+  const stampPath = join(dirname(entry), '.cctm-build-stamp');
+  let stamp;
+  try { stamp = JSON.parse(readFileSync(stampPath, 'utf8')); }
+  catch { return { ok: false, reason: 'unstamped', entry }; }
+  const want = webappBuildStamp();
+  if (stamp.version !== want.version || stamp.sourceHash !== want.sourceHash) {
+    return { ok: false, reason: 'drift', entry, want, have: stamp };
+  }
+  return { ok: true, entry };
+}
+
+function writeWebappBuildStamp() {
+  const entry = findWebappEntryPath();
+  if (!entry) return;
+  const want = webappBuildStamp();
+  try {
+    writeFileSync(join(dirname(entry), '.cctm-build-stamp'),
+      JSON.stringify({ ...want, builtAt: new Date().toISOString() }));
+  } catch (_) {}
+}
+
+function pmAvailable(pm) {
+  try {
+    const r = spawnSync(pm, ['--version'], { encoding: 'utf8' });
+    return r.status === 0;
+  } catch (_) { return false; }
+}
+
 function buildWebapp() {
   const cwd = join(PLUGIN_ROOT, 'webapp');
-  const logHeader = `\n[${new Date().toISOString()}] Building CCTM dashboard\n`;
+  const logHeader = `\n[${new Date().toISOString()}] Building CCTM dashboard v=${PLUGIN_VERSION}\n`;
   try { appendFileSync(WEBAPP_BUILD_LOG, logHeader); } catch (_) {}
   const env = { ...process.env, NEXT_TELEMETRY_DISABLED: '1' };
-  const runner = existsSync(join(cwd, 'pnpm-lock.yaml')) ? ['pnpm', ['install', '--frozen-lockfile'], ['build']] : ['npm', ['install'], ['run', 'build']];
+  const preferPnpm = existsSync(join(cwd, 'pnpm-lock.yaml'));
+  let runner;
+  if (preferPnpm && pmAvailable('pnpm')) {
+    runner = ['pnpm', ['install', '--frozen-lockfile'], ['build']];
+  } else if (pmAvailable('npm')) {
+    runner = ['npm', ['install'], ['run', 'build']];
+  } else if (pmAvailable('pnpm')) {
+    runner = ['pnpm', ['install'], ['build']];
+  } else {
+    return { ok: false, error: 'No package manager found. Install npm or pnpm to build the dashboard.' };
+  }
   for (const args of [runner[1], runner[2]]) {
     const r = spawnSync(runner[0], args, { cwd, env, encoding: 'utf8', timeout: 10 * 60 * 1000 });
     try {
@@ -543,22 +646,28 @@ function buildWebapp() {
       return { ok: false, error: `${runner[0]} ${args.join(' ')} failed: ${msg}` };
     }
   }
+  writeWebappBuildStamp();
   return { ok: true };
 }
 
 function startWebapp(opts, res) {
-  if (webappState.proc) return send(res, 200, { ok: true, port: webappState.port, alreadyRunning: true });
+  const validation = validateWebappBuild();
+  if (webappState.proc && validation.ok) {
+    return send(res, 200, { ok: true, port: webappState.port, alreadyRunning: true });
+  }
+  // Drift or missing build → kill any running webapp from old code first.
+  if (webappState.proc) stopWebappProcess();
   const port = Number(opts?.port) || Number(process.env.CCTM_WEBAPP_PORT) || 3636;
   try { killProcess(Number(readFileSync(WEBAPP_PID_FILE, 'utf8').trim())); } catch (_) {}
 
-  let standaloneEntry = findWebappEntry();
-  if (!standaloneEntry) {
+  if (!validation.ok) {
+    state.logErr(`webapp ${validation.reason} — rebuilding`);
     const built = buildWebapp();
     if (!built.ok) {
       return send(res, 500, { ok: false, error: `webapp build failed. See ${WEBAPP_BUILD_LOG}. ${built.error}` });
     }
-    standaloneEntry = findWebappEntry();
   }
+  const standaloneEntry = findWebappEntryPath();
   if (!standaloneEntry) {
     return send(res, 500, { ok: false, error: `webapp build completed but standalone server was not found. See ${WEBAPP_BUILD_LOG}.` });
   }
@@ -590,6 +699,42 @@ function stopWebapp(res) {
   send(res, 200, { ok: true });
 }
 
+let webappBuilding = false;
+
+function buildWebappAsync(res) {
+  const v = validateWebappBuild();
+  if (v.ok) return send(res, 200, { ok: true, building: false, reason: 'in-sync' });
+  if (webappBuilding) return send(res, 200, { ok: true, building: true, reason: 'already-running' });
+
+  // Stale lock file? (>15 min old → assume crashed previous build)
+  try {
+    const st = statSync(WEBAPP_BUILD_LOCK);
+    if (Date.now() - st.mtimeMs < 15 * 60 * 1000) {
+      return send(res, 200, { ok: true, building: true, reason: 'lock-held' });
+    }
+    try { unlinkSync(WEBAPP_BUILD_LOCK); } catch (_) {}
+  } catch (_) {}
+
+  try { writeFileSync(WEBAPP_BUILD_LOCK, String(process.pid)); } catch (_) {}
+  webappBuilding = true;
+  send(res, 200, { ok: true, building: true, reason: v.reason });
+
+  // Run synchronously (we've already responded). buildWebapp uses spawnSync but
+  // we're inside a request handler that's already returned, so the event loop
+  // is unblocked from the client's perspective.
+  setImmediate(() => {
+    try {
+      const result = buildWebapp();
+      state.logErr(`webapp build-async ${result.ok ? 'ok' : 'failed: ' + result.error}`);
+    } catch (e) {
+      state.logErr(`webapp build-async crash ${e.message}`);
+    } finally {
+      webappBuilding = false;
+      try { unlinkSync(WEBAPP_BUILD_LOCK); } catch (_) {}
+    }
+  });
+}
+
 // ---------- Listen with port scan ----------
 
 function listen(port) {
@@ -602,9 +747,19 @@ function listen(port) {
   });
   server.listen(port, '127.0.0.1', () => {
     state.port = port;
+    state.startedAt = new Date().toISOString();
     try { writeFileSync(PORT_FILE, String(port)); } catch (_) {}
     try { writeFileSync(PID_FILE, String(process.pid)); } catch (_) {}
-    state.logErr(`worker listening 127.0.0.1:${port} pid=${process.pid}`);
+    try {
+      writeFileSync(STAMP_FILE, JSON.stringify({
+        version: PLUGIN_VERSION,
+        codeHash: CODE_HASH,
+        pid: process.pid,
+        port,
+        startedAt: state.startedAt,
+      }));
+    } catch (_) {}
+    state.logErr(`worker listening 127.0.0.1:${port} pid=${process.pid} v=${PLUGIN_VERSION} hash=${CODE_HASH}`);
   });
 }
 
