@@ -1,21 +1,21 @@
 {
   "name": "zotabros",
-  "description": "zotabros's Claude Code plugins",
   "owner": {
     "name": "zotabros",
+    "email": "zotabros@gmail.com",
     "url": "https://github.com/zotabros"
+  },
+  "metadata": {
+    "description": "zotabros's Claude Code plugins",
+    "version": "0.2.0"
   },
   "plugins": [
     {
       "name": "cctm",
-      "source": {
-        "source": "github",
-        "repo": "zotabros/cctm-plugin"
-      },
-      "version": "0.2.0",
+      "source": "./",
       "description": "Local-first Claude Code telemetry plugin: per-turn token & cost analytics, no cloud.",
-      "author": "zotabros",
-      "license": "MIT"
+      "category": "telemetry",
+      "tags": ["telemetry", "analytics", "tokens", "cost", "local-first", "sqlite"]
     }
   ]
 }
