@@ -215,6 +215,16 @@ function projectFor(cwd) {
 function ensureSession(sessionUuid, cwd, transcriptPath, model, ts) {
   const existing = db.prepare('SELECT id, projectId FROM Session WHERE sessionUuid = ?').get(sessionUuid);
   if (existing) {
+    // Backfill provides authoritative startedAt/model from the JSONL itself,
+    // which beats whatever was stamped at SessionStart-on-install time.
+    if (model) {
+      db.prepare(`UPDATE Session SET model = ? WHERE id = ? AND (model IS NULL OR model = '' OR model = 'unknown')`)
+        .run(model, existing.id);
+    }
+    if (ts) {
+      db.prepare(`UPDATE Session SET startedAt = ? WHERE id = ? AND startedAt > ?`)
+        .run(ts, existing.id, ts);
+    }
     if (transcriptPath) {
       db.prepare(`
         INSERT INTO SessionCursor (sessionId, transcriptPath, byteOffset, updatedAt)
@@ -387,13 +397,20 @@ async function runBackfill(rootPath) {
       const text = await readFile(file, 'utf8');
       const lines = text.split('\n');
       const sessionUuid = file.split('/').pop().replace(/\.jsonl$/, '');
-      let cwd = null;
+      // First scan: extract cwd, earliest timestamp, and the model the
+      // session ran on (from the first assistant message that has one).
+      let cwd = null, firstTs = null, sessionModel = null;
       for (const line of lines) {
         if (!line) continue;
-        try { const j = JSON.parse(line); if (j.cwd) { cwd = j.cwd; break; } } catch (_) {}
+        let j;
+        try { j = JSON.parse(line); } catch (_) { continue; }
+        if (!cwd && j.cwd) cwd = j.cwd;
+        if (!firstTs && j.timestamp) firstTs = j.timestamp;
+        if (!sessionModel && j.type === 'assistant' && j.message?.model) sessionModel = j.message.model;
+        if (cwd && firstTs && sessionModel) break;
       }
       if (!cwd) continue;
-      const sessionId = ensureSession(sessionUuid, cwd, file, null, null);
+      const sessionId = ensureSession(sessionUuid, cwd, file, sessionModel, firstTs);
       const acct = db.prepare('SELECT accountId FROM Project p JOIN Session s ON s.projectId = p.id WHERE s.id = ?').get(sessionId);
       const accountId = acct?.accountId || 'local';
       const ctx = { sessionUuid, cwd };
@@ -431,8 +448,8 @@ async function runBackfill(rootPath) {
             const hash = createHash('sha256').update(promptText).digest('hex').slice(0, 16);
             const preview = promptText.slice(0, 280);
             const turnId = randomUUID();
-            insertTurn.run(turnId, sessionId, ordinal, entry.timestamp || new Date().toISOString(), hash, preview);
-            if (insertTurn.changes) turnsCreated++;
+            const tr = insertTurn.run(turnId, sessionId, ordinal, entry.timestamp || new Date().toISOString(), hash, preview);
+            if (tr.changes) turnsCreated++;
             currentTurnId = turnId;
             continue;
           }
@@ -459,8 +476,8 @@ async function runBackfill(rootPath) {
           if (currentTurnId && toolCalls.length) {
             for (const tc of toolCalls) {
               const { mcpServer, mcpToolName } = parseMcp(tc.name);
-              insertTool.run(randomUUID(), currentTurnId, tc.id || randomUUID(), tc.name, mcpServer, mcpToolName, entry.timestamp || new Date().toISOString());
-              if (insertTool.changes) toolsCreated++;
+              const tlr = insertTool.run(randomUUID(), currentTurnId, tc.id || randomUUID(), tc.name, mcpServer, mcpToolName, entry.timestamp || new Date().toISOString());
+              if (tlr.changes) toolsCreated++;
             }
           }
         }
