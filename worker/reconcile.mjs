@@ -159,8 +159,9 @@ async function runAttributionForOpenTurns(state, sessionId, allEntries) {
     const promptText = extractUserPromptText(slice[0]);
     if (!promptText) continue;
     const hash = createHash('sha256').update(promptText).digest('hex').slice(0, 16);
-    const dbTurn = openTurns.find((t) => t.userPromptHash === hash);
-    if (!dbTurn) continue;
+    const dbTurnIndex = openTurns.findIndex((t) => t.userPromptHash === hash);
+    if (dbTurnIndex === -1) continue;
+    const [dbTurn] = openTurns.splice(dbTurnIndex, 1);
 
     const { totals, perToolUseId } = attributeTurn(slice);
     const sessionRow = db.prepare('SELECT id, model FROM Session WHERE id = ?').get(sessionId);

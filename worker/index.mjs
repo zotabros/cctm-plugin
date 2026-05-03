@@ -469,8 +469,9 @@ async function runBackfill(rootPath) {
           ? chunk[0].message.content
           : chunk[0].message.content.filter((x) => x?.type === 'text').map((x) => x.text || '').join('\n');
         const hash = createHash('sha256').update(promptText).digest('hex').slice(0, 16);
-        const dbTurn = turns.find((t) => t.userPromptHash === hash);
-        if (!dbTurn) continue;
+        const dbTurnIndex = turns.findIndex((t) => t.userPromptHash === hash);
+        if (dbTurnIndex === -1) continue;
+        const [dbTurn] = turns.splice(dbTurnIndex, 1);
 
         const { totals, perToolUseId } = attributeTurn(chunk);
         const sessionRow = db.prepare('SELECT model FROM Session WHERE id = ?').get(sessionId);
