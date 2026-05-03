@@ -5,14 +5,34 @@ const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
-const { spawn } = require('node:child_process');
+const { spawn, spawnSync } = require('node:child_process');
 
 const CCTM_DIR = path.join(os.homedir(), '.cctm');
 const PORT_FILE = path.join(CCTM_DIR, 'worker.port');
 const PID_FILE = path.join(CCTM_DIR, 'worker.pid');
 const LOG_FILE = path.join(CCTM_DIR, 'worker.log');
+const INSTALL_LOG = path.join(CCTM_DIR, 'install.log');
 const PLUGIN_ROOT = path.resolve(__dirname, '..');
 const WORKER_ENTRY = path.join(PLUGIN_ROOT, 'worker', 'index.mjs');
+const NODE_MODULES = path.join(PLUGIN_ROOT, 'node_modules');
+const INSTALL_STAMP = path.join(PLUGIN_ROOT, 'node_modules', '.cctm-install-stamp');
+
+function ensureDeps() {
+  // Skip if node_modules + stamp exist (idempotent fast path).
+  if (fs.existsSync(INSTALL_STAMP)) return true;
+  ensureDir();
+  let logFd;
+  try { logFd = fs.openSync(INSTALL_LOG, 'a'); } catch (_) { logFd = 'ignore'; }
+  const npm = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+  const res = spawnSync(npm, ['install', '--omit=dev', '--no-audit', '--no-fund', '--silent'], {
+    cwd: PLUGIN_ROOT,
+    stdio: ['ignore', logFd, logFd],
+    env: process.env,
+  });
+  if (res.status !== 0) return false;
+  try { fs.writeFileSync(INSTALL_STAMP, new Date().toISOString()); } catch (_) {}
+  return true;
+}
 
 function ensureDir() {
   try { fs.mkdirSync(CCTM_DIR, { recursive: true }); } catch (_) {}
@@ -67,7 +87,10 @@ ensureDir();
 const port = readPort();
 probe(port, (alive) => {
   if (alive) { process.exit(0); return; }
-  if (!pidAlive()) spawnWorker();
+  if (!pidAlive()) {
+    if (!ensureDeps()) { process.exit(0); return; }
+    spawnWorker();
+  }
   waitHealthy(port, Date.now() + 1500, () => process.exit(0));
 });
-setTimeout(() => process.exit(0), 2000).unref();
+setTimeout(() => process.exit(0), 5000).unref();
