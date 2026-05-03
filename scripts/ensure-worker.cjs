@@ -174,21 +174,22 @@ function waitHealthy(port, deadline, done) {
   });
 }
 
-// Wait for a stamp file matching the expected codeHash to appear — proves
+// Wait for a stamp file matching expected version+codeHash to appear — proves
 // the NEW worker we just spawned is the one writing it (not a stale legacy
 // worker on the same default port).
-function waitForFreshStamp(wantHash, deadline, done) {
+function waitForFreshStamp(want, deadline, done) {
   const have = readJsonSafe(STAMP_FILE);
-  if (have && have.codeHash === wantHash && pidAlive(have.pid)) return done(true);
+  if (have && have.version === want.version && have.codeHash === want.codeHash && pidAlive(have.pid)) return done(true);
   if (Date.now() > deadline) return done(false);
-  setTimeout(() => waitForFreshStamp(wantHash, deadline, done), 100);
+  setTimeout(() => waitForFreshStamp(want, deadline, done), 100);
 }
 
-// Sweep PORT_RANGE for any worker reporting a stale codeHash and kill it.
-// Covers the case where an older plugin version's worker is still bound to a
-// different port in the range.
+// Sweep PORT_RANGE for any worker reporting a stale version OR codeHash and
+// kill it. Covers updates where worker source is unchanged (codeHash same)
+// but the plugin version bumped — and updates where source did change.
+// Skips our own freshly-spawned worker by matching both fields.
 const PORT_RANGE = [39636, 39646];
-function reapStaleWorkers(wantHash, done) {
+function reapStaleWorkers(want, done) {
   let pending = PORT_RANGE[1] - PORT_RANGE[0] + 1;
   const finish = () => { if (--pending <= 0) done(); };
   for (let p = PORT_RANGE[0]; p <= PORT_RANGE[1]; p++) {
@@ -198,7 +199,9 @@ function reapStaleWorkers(wantHash, done) {
       res.on('end', () => {
         try {
           const j = JSON.parse(body);
-          if (j && j.pid && j.codeHash !== wantHash) stopPid(j.pid);
+          if (j && j.pid && (j.version !== want.version || j.codeHash !== want.codeHash)) {
+            stopPid(j.pid);
+          }
         } catch (_) {}
         finish();
       });
@@ -256,11 +259,11 @@ if (sync.inSync) {
       if (!ensureDeps()) return finish();
       const want = expectedStamp();
       spawnWorker();
-      waitForFreshStamp(want.codeHash, Date.now() + 3000, (ok) => {
+      waitForFreshStamp(want, Date.now() + 3000, (ok) => {
         if (!ok) return finish();
         // New worker's stamp is up. Sweep range to remove any legacy workers
         // that are still bound to other ports in PORT_RANGE.
-        reapStaleWorkers(want.codeHash, () => {
+        reapStaleWorkers(want, () => {
           fireBuildAsync(readPort());
           finish();
         });

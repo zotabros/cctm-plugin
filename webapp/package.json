@@ -1,10 +1,10 @@
 {
   "name": "cctm-webapp",
-  "version": "0.2.11",
+  "version": "0.2.12",
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "build": "next build",
+    "build": "prisma generate --schema prisma/schema.prisma && next build",
     "start": "next start",
     "lint": "next lint",
     "typecheck": "tsc --noEmit",
