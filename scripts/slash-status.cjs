@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 'use strict';
+const { execFileSync } = require('node:child_process');
+const path = require('node:path');
 const { call } = require('./slash-helper.cjs');
 (async () => {
+  try { execFileSync(process.execPath, [path.join(__dirname, 'ensure-worker.cjs')], { stdio: 'ignore' }); } catch (_) {}
   const r = await call('GET', '/api/status');
   if (r.status !== 200) { console.log(`cctm worker not reachable (${r.status})`); process.exit(0); }
   const s = r.body;

@@ -8,15 +8,15 @@ export function getCursor(db, sessionId) {
 export function setCursor(db, sessionId, transcriptPath, byteOffset) {
   db.prepare(`
     INSERT INTO SessionCursor (sessionId, transcriptPath, byteOffset, updatedAt)
-    VALUES (?, ?, ?, datetime('now'))
+    VALUES (?, ?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
     ON CONFLICT(sessionId) DO UPDATE SET
       transcriptPath = excluded.transcriptPath,
       byteOffset     = excluded.byteOffset,
-      updatedAt      = datetime('now')
+      updatedAt      = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
   `).run(sessionId, transcriptPath, byteOffset);
 }
 
 export function advanceCursor(db, sessionId, byteOffset) {
-  db.prepare("UPDATE SessionCursor SET byteOffset = ?, updatedAt = datetime('now') WHERE sessionId = ?")
+  db.prepare("UPDATE SessionCursor SET byteOffset = ?, updatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE sessionId = ?")
     .run(byteOffset, sessionId);
 }

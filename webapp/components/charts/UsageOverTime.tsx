@@ -1,8 +1,8 @@
 "use client";
 
 import {
-  Area,
-  AreaChart,
+  Bar,
+  BarChart,
   CartesianGrid,
   ResponsiveContainer,
   Tooltip,
@@ -85,15 +85,7 @@ export function UsageOverTime({
   return (
     <div style={{ width: "100%", height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <AreaChart data={buckets} margin={{ top: 12, right: 8, bottom: 8, left: 0 }}>
-          <defs>
-            {series.map((s) => (
-              <linearGradient key={s.key} id={`uot-${s.key}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={s.color} stopOpacity={0.18} />
-                <stop offset="100%" stopColor={s.color} stopOpacity={0} />
-              </linearGradient>
-            ))}
-          </defs>
+        <BarChart data={buckets} margin={{ top: 12, right: 8, bottom: 8, left: 0 }} barCategoryGap="14%">
           <CartesianGrid stroke="var(--border)" strokeDasharray="0" vertical={false} />
           <XAxis
             dataKey="ts"
@@ -113,23 +105,19 @@ export function UsageOverTime({
             width={56}
           />
           <Tooltip
-            cursor={{ stroke: "var(--accent)", strokeWidth: 1 }}
+            cursor={{ fill: "var(--surface-2)" }}
             content={<ChartTooltip series={series} />}
           />
           {series.map((s) => (
-            <Area
+            <Bar
               key={s.key}
-              type="monotone"
               dataKey={s.key}
-              stackId="1"
-              stroke={s.color}
-              strokeWidth={1.5}
-              fill={`url(#uot-${s.key})`}
-              fillOpacity={1}
+              stackId="usage"
+              fill={s.color}
               isAnimationActive={false}
             />
           ))}
-        </AreaChart>
+        </BarChart>
       </ResponsiveContainer>
     </div>
   );

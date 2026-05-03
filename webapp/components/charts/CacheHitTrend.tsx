@@ -1,7 +1,7 @@
 "use client";
 
 import {
-  Area,
+  Bar,
   CartesianGrid,
   ComposedChart,
   Line,
@@ -64,17 +64,7 @@ export function CacheHitTrend({ data, height = 360 }: CacheHitTrendProps) {
   return (
     <div style={{ width: "100%", height }}>
       <ResponsiveContainer width="100%" height="100%">
-        <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 8, left: 0 }}>
-          <defs>
-            <linearGradient id="cht-input" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--accent)" stopOpacity={0.18} />
-              <stop offset="100%" stopColor="var(--accent)" stopOpacity={0} />
-            </linearGradient>
-            <linearGradient id="cht-cr" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%" stopColor="var(--positive)" stopOpacity={0.20} />
-              <stop offset="100%" stopColor="var(--positive)" stopOpacity={0} />
-            </linearGradient>
-          </defs>
+        <ComposedChart data={data} margin={{ top: 12, right: 8, bottom: 8, left: 0 }} barCategoryGap="14%">
           <CartesianGrid stroke="var(--border)" strokeDasharray="0" vertical={false} />
           <XAxis
             dataKey="day"
@@ -106,38 +96,28 @@ export function CacheHitTrend({ data, height = 360 }: CacheHitTrendProps) {
             width={42}
           />
           <Tooltip
-            cursor={{ stroke: "var(--accent)", strokeWidth: 1 }}
+            cursor={{ fill: "var(--surface-2)" }}
             content={<ChartTooltip />}
           />
-          <Area
+          <Bar
             yAxisId="left"
-            type="monotone"
-            dataKey="cacheCreation"
-            stackId="tokens"
-            stroke="var(--accent)"
-            strokeOpacity={0.6}
-            strokeWidth={1}
-            fill="var(--accent-soft)"
-            isAnimationActive={false}
-          />
-          <Area
-            yAxisId="left"
-            type="monotone"
-            dataKey="input"
-            stackId="tokens"
-            stroke="var(--accent)"
-            strokeWidth={1.5}
-            fill="url(#cht-input)"
-            isAnimationActive={false}
-          />
-          <Area
-            yAxisId="left"
-            type="monotone"
             dataKey="cacheRead"
             stackId="tokens"
-            stroke="var(--positive)"
-            strokeWidth={1.5}
-            fill="url(#cht-cr)"
+            fill="var(--positive)"
+            isAnimationActive={false}
+          />
+          <Bar
+            yAxisId="left"
+            dataKey="input"
+            stackId="tokens"
+            fill="var(--accent)"
+            isAnimationActive={false}
+          />
+          <Bar
+            yAxisId="left"
+            dataKey="cacheCreation"
+            stackId="tokens"
+            fill="var(--accent-soft)"
             isAnimationActive={false}
           />
           <Line

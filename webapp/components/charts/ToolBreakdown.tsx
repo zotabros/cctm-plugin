@@ -74,33 +74,38 @@ export function ToolBreakdown({ data, height = 320 }: ToolBreakdownProps) {
         <ResponsiveContainer width="100%" height="100%">
           <BarChart
             data={sorted}
-            layout="vertical"
-            margin={{ top: 4, right: 16, bottom: 4, left: 0 }}
+            margin={{ top: 4, right: 8, bottom: 8, left: 0 }}
+            barCategoryGap="14%"
           >
-            <CartesianGrid stroke="var(--border)" strokeDasharray="0" horizontal={false} />
+            <CartesianGrid stroke="var(--border)" strokeDasharray="0" vertical={false} />
             <XAxis
-              type="number"
-              tickFormatter={(v: number) => (mode === "count" ? formatCount(v) : formatTokens(v))}
+              dataKey="tool"
+              type="category"
+              interval={0}
+              angle={-35}
+              textAnchor="end"
+              height={70}
               stroke="var(--border-strong)"
               tick={{ fill: "var(--text-muted)", fontSize: 11, fontFamily: "var(--font-geist-mono)" }}
               tickLine={false}
               axisLine={{ stroke: "var(--border)" }}
             />
             <YAxis
-              dataKey="tool"
-              type="category"
+              type="number"
+              orientation="right"
+              tickFormatter={(v: number) => (mode === "count" ? formatCount(v) : formatTokens(v))}
               stroke="var(--border-strong)"
               tick={{ fill: "var(--text-muted)", fontSize: 11, fontFamily: "var(--font-geist-mono)" }}
               tickLine={false}
               axisLine={false}
-              width={120}
+              width={56}
             />
             <Tooltip cursor={{ fill: "var(--surface-2)" }} content={<ChartTooltip mode={mode} />} />
             <Bar
               dataKey={dataKey}
               fill="var(--accent)"
               isAnimationActive={false}
-              radius={[0, 2, 2, 0]}
+              radius={[2, 2, 0, 0]}
             />
           </BarChart>
         </ResponsiveContainer>

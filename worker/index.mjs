@@ -228,8 +228,8 @@ function ensureSession(sessionUuid, cwd, transcriptPath, model, ts) {
     if (transcriptPath) {
       db.prepare(`
         INSERT INTO SessionCursor (sessionId, transcriptPath, byteOffset, updatedAt)
-        VALUES (?, ?, COALESCE((SELECT byteOffset FROM SessionCursor WHERE sessionId = ?), 0), datetime('now'))
-        ON CONFLICT(sessionId) DO UPDATE SET transcriptPath = excluded.transcriptPath, updatedAt = datetime('now')
+        VALUES (?, ?, COALESCE((SELECT byteOffset FROM SessionCursor WHERE sessionId = ?), 0), strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+        ON CONFLICT(sessionId) DO UPDATE SET transcriptPath = excluded.transcriptPath, updatedAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       `).run(existing.id, transcriptPath, existing.id);
     }
     return existing.id;
@@ -524,7 +524,7 @@ async function runBackfill(rootPath) {
         const model = sessionRow?.model || 'claude-sonnet-4-6';
         const turnCost = computeCost({ model, input: totals.input, output: totals.output, cacheCreation: totals.cacheWrite, cacheRead: totals.cacheRead });
 
-        db.prepare(`UPDATE Turn SET totalInputTokens = ?, totalOutputTokens = ?, totalCacheReadTokens = ?, totalCacheWriteTokens = ?, totalCostUsd = ?, reconciledAt = datetime('now') WHERE id = ?`)
+        db.prepare(`UPDATE Turn SET totalInputTokens = ?, totalOutputTokens = ?, totalCacheReadTokens = ?, totalCacheWriteTokens = ?, totalCostUsd = ?, reconciledAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now') WHERE id = ?`)
           .run(totals.input, totals.output, totals.cacheRead, totals.cacheWrite, turnCost, dbTurn.id);
 
         const updTool = db.prepare(`UPDATE ToolInvocation SET attributedInputTokens = ?, attributedOutputTokens = ?, attributedCostUsd = ? WHERE toolUseId = ? AND turnId = ?`);

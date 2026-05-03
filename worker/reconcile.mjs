@@ -93,12 +93,14 @@ async function reconcileOnce(state, sessionId) {
   `);
 
   const allEntries = [];
+  let firstModel = null;
   const insertTx = db.transaction(() => {
     for (const line of parsedLines) {
       const raw = parseAnyLine(line);
       if (raw) allEntries.push(raw);
       const ev = parseJsonlLine(line, ctx);
       if (!ev) continue;
+      if (!firstModel && ev.model) firstModel = ev.model;
       const cost = computeCost({
         model: ev.model,
         input: ev.inputTokens,
@@ -115,6 +117,13 @@ async function reconcileOnce(state, sessionId) {
     }
   });
   insertTx();
+
+  // Backfill Session.model from the first assistant message with a model,
+  // when SessionStart hook didn't capture it (model is null/empty/'unknown').
+  if (firstModel) {
+    db.prepare(`UPDATE Session SET model = ? WHERE id = ? AND (model IS NULL OR model = '' OR model = 'unknown')`)
+      .run(firstModel, sessionId);
+  }
 
   // Run attribution per open Turn (the most recent unreconciled Turn(s)).
   await runAttributionForOpenTurns(state, sessionId, allEntries);
@@ -176,7 +185,7 @@ async function runAttributionForOpenTurns(state, sessionId, allEntries) {
       UPDATE Turn SET
         totalInputTokens = ?, totalOutputTokens = ?,
         totalCacheReadTokens = ?, totalCacheWriteTokens = ?,
-        totalCostUsd = ?, reconciledAt = datetime('now')
+        totalCostUsd = ?, reconciledAt = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
       WHERE id = ?
     `).run(totals.input, totals.output, totals.cacheRead, totals.cacheWrite, turnCost, dbTurn.id);
 
