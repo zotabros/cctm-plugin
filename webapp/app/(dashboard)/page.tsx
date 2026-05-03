@@ -18,6 +18,7 @@ import {
   getTopProjects,
   getTopMachines,
   getRecentSessions,
+  type TopAccount,
   type TopProject,
   type TopMachine,
   type RecentSession,
@@ -93,7 +94,7 @@ export default async function OverviewPage({ searchParams }: PageProps) {
             {topAccounts.length === 0 ? (
               <EmptyState message="No usage in this range" />
             ) : (
-              topAccounts.map((a) => (
+              topAccounts.map((a: TopAccount) => (
                 <div key={a.accountId} className="flex items-center gap-3">
                   <AccountChip color={a.color} label={a.label} className="w-32 truncate" />
                   <div className="relative h-1.5 flex-1 overflow-hidden rounded-full bg-surface-2">

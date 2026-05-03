@@ -112,14 +112,26 @@ function expectedStamp() {
   return { version: PLUGIN_VERSION, codeHash: h.digest('hex').slice(0, 16) };
 }
 
+function readLegacyPid() {
+  try { const n = Number(fs.readFileSync(PID_FILE, 'utf8').trim()); return n || 0; } catch (_) { return 0; }
+}
+
 function workerInSync() {
-  const have = readJsonSafe(STAMP_FILE);
-  if (!have || !pidAlive(have.pid)) return { inSync: false, have };
-  const want = expectedStamp();
-  if (have.version !== want.version || have.codeHash !== want.codeHash) {
-    return { inSync: false, have, want };
+  const stamp = readJsonSafe(STAMP_FILE);
+  if (stamp && pidAlive(stamp.pid)) {
+    const want = expectedStamp();
+    if (stamp.version === want.version && stamp.codeHash === want.codeHash) {
+      return { inSync: true, have: stamp };
+    }
+    return { inSync: false, have: stamp, want };
   }
-  return { inSync: true, have };
+  // No stamp (or its PID is dead) — fall back to legacy PID file. A pre-0.2.9
+  // worker writes worker.pid but no stamp; we treat it as drift.
+  const legacyPid = readLegacyPid();
+  if (legacyPid && pidAlive(legacyPid)) {
+    return { inSync: false, have: { pid: legacyPid, port: readPort(), legacy: true } };
+  }
+  return { inSync: false, have: null };
 }
 
 // Concurrent-safety: only one ensure-worker.cjs at a time may kill+respawn.
