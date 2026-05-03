@@ -2,7 +2,6 @@ export const dynamic = "force-dynamic";
 
 import Link from "next/link";
 import { auth } from "@/lib/auth";
-import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { HairlineCard } from "@/components/primitives/HairlineCard";
 import { EmptyState } from "@/components/primitives/EmptyState";
@@ -17,6 +16,7 @@ import { getFilterOptions, type UsageFilters } from "@/lib/queries";
 import { parseRangeParams, rangeLabel } from "@/lib/range";
 import { formatTokens, formatUsd, formatCount } from "@/lib/format";
 import { formatDateTime, formatDuration } from "@/lib/format-time";
+import { csv } from "@/lib/utils";
 
 const PAGE_SIZE = 50;
 
@@ -31,12 +31,6 @@ interface PageProps {
     projects?: string;
     page?: string;
   }>;
-}
-
-function csv(s: string | undefined): string[] | undefined {
-  if (!s) return undefined;
-  const arr = s.split(",").filter(Boolean);
-  return arr.length ? arr : undefined;
 }
 
 function buildBaseHref(sp: Record<string, string | undefined>): string {

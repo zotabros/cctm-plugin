@@ -11,16 +11,20 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync, cpSync } from 'node:fs';
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { openWriter, migrate, ensureLocalAccount, defaultDbPath } from './db.mjs';
-import { setCursor } from './cursor.mjs';
+import { setCursor, getCursor } from './cursor.mjs';
 import { parseJsonlLine } from './parser.mjs';
 import { computeCost } from '../shared/pricing.mjs';
 import { collectInventory } from './inventory.mjs';
 import { scheduleReconcile } from './reconcile.mjs';
+
+function safeNum(n) {
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.floor(n) : 0;
+}
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const PLUGIN_ROOT = dirname(HERE);
@@ -45,10 +49,19 @@ const state = {
 
 const webappState = { proc: null, port: null };
 
+const MAX_BODY_BYTES = 1024 * 1024; // 1 MB
+
 function readBody(req) {
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
+    const contentLength = Number(req.headers['content-length'] || 0);
+    if (contentLength > MAX_BODY_BYTES) return reject(new Error('payload too large'));
+    let size = 0;
     let chunks = [];
-    req.on('data', (c) => chunks.push(c));
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > MAX_BODY_BYTES) { chunks = []; return reject(new Error('payload too large')); }
+      chunks.push(c);
+    });
     req.on('end', () => {
       const buf = Buffer.concat(chunks).toString('utf8');
       if (!buf) return resolve({});
@@ -100,13 +113,19 @@ async function handle(req, res) {
   const m = url.pathname.match(/^\/hook\/([A-Za-z]+)$/);
   if (m && req.method === 'POST') {
     const event = m[1];
-    const body = await readBody(req);
+    let body;
+    try {
+      body = await readBody(req);
+    } catch (e) {
+      return send(res, 413, { ok: false, error: e.message });
+    }
     try {
       handleHook(event, body);
+      return send(res, 200, { ok: true });
     } catch (e) {
       state.logErr(`hook ${event} ${e.message}`);
+      return send(res, 500, { ok: false, error: e.message });
     }
-    return send(res, 200, { ok: true });
   }
   if (url.pathname === '/backfill' && req.method === 'POST') {
     const body = await readBody(req);
@@ -302,6 +321,14 @@ function onPreCompact(p) {
 
 // ---------- Backfill ----------
 
+function isUserPrompt(entry) {
+  if (entry?.type !== 'user') return false;
+  const c = entry?.message?.content;
+  if (typeof c === 'string') return true;
+  if (Array.isArray(c)) return !c.some((x) => x?.type === 'tool_result');
+  return false;
+}
+
 async function runBackfill(rootPath) {
   const root = rootPath || join(homedir(), '.claude', 'projects');
   let files = [];
@@ -318,6 +345,8 @@ async function runBackfill(rootPath) {
   }
 
   let inserted = 0;
+  let turnsCreated = 0;
+  let toolsCreated = 0;
   const insertEvent = db.prepare(`
     INSERT OR IGNORE INTO UsageEvent
       (id, sessionId, ts, role, model, inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, toolCallsJson, costUsd, accountId)
@@ -329,7 +358,6 @@ async function runBackfill(rootPath) {
       const text = await readFile(file, 'utf8');
       const lines = text.split('\n');
       const sessionUuid = file.split('/').pop().replace(/\.jsonl$/, '');
-      // Find a cwd from any assistant entry.
       let cwd = null;
       for (const line of lines) {
         if (!line) continue;
@@ -340,15 +368,72 @@ async function runBackfill(rootPath) {
       const acct = db.prepare('SELECT accountId FROM Project p JOIN Session s ON s.projectId = p.id WHERE s.id = ?').get(sessionId);
       const accountId = acct?.accountId || 'local';
       const ctx = { sessionUuid, cwd };
+
+      const insertTurn = db.prepare(`
+        INSERT OR IGNORE INTO Turn (id, sessionId, ordinal, promptStartedAt, userPromptHash, userPromptPreview)
+        VALUES (?, ?, ?, ?, ?, ?)
+      `);
+      const insertTool = db.prepare(`
+        INSERT OR IGNORE INTO ToolInvocation (id, turnId, toolUseId, toolName, mcpServer, mcpToolName, startedAt)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `);
+      const parseMcp = (name) => {
+        const m = /^mcp__([^_]+)__(.+)$/.exec(name || '');
+        return m ? { mcpServer: m[1], mcpToolName: m[2] } : { mcpServer: null, mcpToolName: null };
+      };
+
+      const parsed = [];
+      for (const line of lines) {
+        if (!line) continue;
+        try { parsed.push(JSON.parse(line)); } catch (_) {}
+      }
+
       const tx = db.transaction(() => {
-        for (const line of lines) {
-          const ev = parseJsonlLine(line, ctx);
-          if (!ev) continue;
-          const cost = computeCost({ model: ev.model, input: ev.inputTokens, output: ev.outputTokens, cacheCreation: ev.cacheCreationTokens, cacheRead: ev.cacheReadTokens });
-          const r = insertEvent.run(randomUUID(), sessionId, ev.timestamp, ev.role, ev.model || 'unknown',
-            ev.inputTokens, ev.outputTokens, ev.cacheCreationTokens, ev.cacheReadTokens,
-            ev.toolCalls ? JSON.stringify(ev.toolCalls) : null, cost, accountId);
+        let ordinal = 0;
+        let currentTurnId = null;
+
+        for (const entry of parsed) {
+          // User prompt → create Turn
+          if (isUserPrompt(entry)) {
+            ordinal++;
+            const promptText = typeof entry.message.content === 'string'
+              ? entry.message.content
+              : entry.message.content.filter((x) => x?.type === 'text').map((x) => x.text || '').join('\n');
+            const hash = createHash('sha256').update(promptText).digest('hex').slice(0, 16);
+            const preview = promptText.slice(0, 280);
+            const turnId = randomUUID();
+            insertTurn.run(turnId, sessionId, ordinal, entry.timestamp || new Date().toISOString(), hash, preview);
+            if (insertTurn.changes) turnsCreated++;
+            currentTurnId = turnId;
+            continue;
+          }
+
+          // Assistant message → UsageEvent + ToolInvocation
+          if (entry.type !== 'assistant' || !entry.message) continue;
+          const usage = entry.message.usage ?? {};
+          const model = entry.message.model;
+          const inputTokens = safeNum(usage.input_tokens);
+          const outputTokens = safeNum(usage.output_tokens);
+          const cacheCreationTokens = safeNum(usage.cache_creation_input_tokens);
+          const cacheReadTokens = safeNum(usage.cache_read_input_tokens);
+          const toolCalls = Array.isArray(entry.message.content)
+            ? entry.message.content.filter((b) => b?.type === 'tool_use')
+            : [];
+          const toolCallsJson = toolCalls.length ? JSON.stringify(toolCalls.map((t) => ({ name: t.name, inputBytes: JSON.stringify(t.input ?? null).length, toolUseId: t.id }))) : null;
+          const cost = computeCost({ model, input: inputTokens, output: outputTokens, cacheCreation: cacheCreationTokens, cacheRead: cacheReadTokens });
+
+          const r = insertEvent.run(randomUUID(), sessionId, entry.timestamp, 'assistant', model || 'unknown',
+            inputTokens, outputTokens, cacheCreationTokens, cacheReadTokens, toolCallsJson, cost, accountId);
           if (r.changes) inserted++;
+
+          // ToolInvocation records
+          if (currentTurnId && toolCalls.length) {
+            for (const tc of toolCalls) {
+              const { mcpServer, mcpToolName } = parseMcp(tc.name);
+              insertTool.run(randomUUID(), currentTurnId, tc.id || randomUUID(), tc.name, mcpServer, mcpToolName, entry.timestamp || new Date().toISOString());
+              if (insertTool.changes) toolsCreated++;
+            }
+          }
         }
       });
       tx();
@@ -356,7 +441,57 @@ async function runBackfill(rootPath) {
       state.logErr(`backfill ${file} ${e.message}`);
     }
   }
-  return { ok: true, files: files.length, inserted };
+
+  // Run attribution for all sessions that have open turns.
+  const openSessions = db.prepare(`
+    SELECT DISTINCT sessionId FROM Turn WHERE reconciledAt IS NULL
+  `).all();
+  for (const { sessionId } of openSessions) {
+    try {
+      const { attributeTurn } = await import('./attribution.mjs');
+      const { parseAnyLine } = await import('./parser.mjs');
+      const turns = db.prepare(`SELECT id, userPromptHash FROM Turn WHERE sessionId = ? AND reconciledAt IS NULL`).all(sessionId);
+      const cursor = getCursor(db, sessionId);
+      if (!cursor) continue;
+      const fh = await readFile(cursor.transcriptPath).catch(() => null);
+      if (!fh) continue;
+      const allEntries = fh.toString('utf8').split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return null; } }).filter(Boolean);
+      const turnChunks = [];
+      let cur = null;
+      for (const e of allEntries) {
+        if (isUserPrompt(e)) { if (cur) turnChunks.push(cur); cur = [e]; }
+        else if (cur) cur.push(e);
+      }
+      if (cur) turnChunks.push(cur);
+
+      for (const chunk of turnChunks) {
+        const promptText = typeof chunk[0].message.content === 'string'
+          ? chunk[0].message.content
+          : chunk[0].message.content.filter((x) => x?.type === 'text').map((x) => x.text || '').join('\n');
+        const hash = createHash('sha256').update(promptText).digest('hex').slice(0, 16);
+        const dbTurn = turns.find((t) => t.userPromptHash === hash);
+        if (!dbTurn) continue;
+
+        const { totals, perToolUseId } = attributeTurn(chunk);
+        const sessionRow = db.prepare('SELECT model FROM Session WHERE id = ?').get(sessionId);
+        const model = sessionRow?.model || 'claude-sonnet-4-6';
+        const turnCost = computeCost({ model, input: totals.input, output: totals.output, cacheCreation: totals.cacheWrite, cacheRead: totals.cacheRead });
+
+        db.prepare(`UPDATE Turn SET totalInputTokens = ?, totalOutputTokens = ?, totalCacheReadTokens = ?, totalCacheWriteTokens = ?, totalCostUsd = ?, reconciledAt = datetime('now') WHERE id = ?`)
+          .run(totals.input, totals.output, totals.cacheRead, totals.cacheWrite, turnCost, dbTurn.id);
+
+        const updTool = db.prepare(`UPDATE ToolInvocation SET attributedInputTokens = ?, attributedOutputTokens = ?, attributedCostUsd = ? WHERE toolUseId = ? AND turnId = ?`);
+        for (const [toolUseId, v] of Object.entries(perToolUseId)) {
+          const tc = computeCost({ model, input: v.input, output: v.output, cacheCreation: 0, cacheRead: 0 });
+          updTool.run(v.input, v.output, tc, toolUseId, dbTurn.id);
+        }
+      }
+    } catch (e) {
+      state.logErr(`backfill-attribution ${sessionId} ${e.message}`);
+    }
+  }
+
+  return { ok: true, files: files.length, inserted, turns: turnsCreated, tools: toolsCreated };
 }
 
 // ---------- Webapp supervisor ----------
@@ -373,6 +508,14 @@ function startWebapp(opts, res) {
   if (!standaloneEntry) {
     return send(res, 500, { ok: false, error: `webapp not built. Run pnpm --dir webapp build.` });
   }
+  // Copy static + public dirs into standalone (Next.js standalone doesn't include them).
+  const standaloneDir = dirname(standaloneEntry);
+  const buildStatic = join(PLUGIN_ROOT, 'webapp', '.next', 'static');
+  const destStatic = join(standaloneDir, '.next', 'static');
+  const buildPublic = join(PLUGIN_ROOT, 'webapp', 'public');
+  const destPublic = join(standaloneDir, 'public');
+  try { if (existsSync(buildStatic)) cpSync(buildStatic, destStatic, { recursive: true }); } catch (_) {}
+  try { if (existsSync(buildPublic)) cpSync(buildPublic, destPublic, { recursive: true }); } catch (_) {}
   const child = spawn(process.execPath, [standaloneEntry], {
     env: { ...process.env, PORT: String(port), CCTM_DB_PATH: defaultDbPath(), CCTM_DB_URL: `file:${defaultDbPath()}` },
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -409,5 +552,8 @@ function listen(port) {
 
 listen(DEFAULT_PORT);
 
-process.on('uncaughtException', (e) => state.logErr(`uncaught ${e?.stack || e}`));
+process.on('uncaughtException', (e) => {
+  state.logErr(`uncaught ${e?.stack || e}`);
+  process.exit(1); // ensure-worker.cjs will restart via double-fork
+});
 process.on('unhandledRejection', (e) => state.logErr(`unhandled ${e}`));

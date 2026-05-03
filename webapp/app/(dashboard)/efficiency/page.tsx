@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
 
 import { auth } from "@/lib/auth";
-import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { HairlineCard } from "@/components/primitives/HairlineCard";
 import { EmptyState } from "@/components/primitives/EmptyState";
@@ -21,6 +20,7 @@ import {
 import { getInsights } from "@/lib/insights";
 import { getFilterOptions, type UsageFilters } from "@/lib/queries";
 import { parseRangeParams, rangeLabel } from "@/lib/range";
+import { csv } from "@/lib/utils";
 
 interface PageProps {
   searchParams: Promise<{
@@ -32,12 +32,6 @@ interface PageProps {
     models?: string;
     projects?: string;
   }>;
-}
-
-function csv(s: string | undefined): string[] | undefined {
-  if (!s) return undefined;
-  const arr = s.split(",").filter(Boolean);
-  return arr.length ? arr : undefined;
 }
 
 export default async function EfficiencyPage({ searchParams }: PageProps) {

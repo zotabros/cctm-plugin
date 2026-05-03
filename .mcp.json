@@ -1,8 +1,9 @@
 {
   "mcpServers": {
     "cctm": {
+      "type": "stdio",
       "command": "node",
-      "args": ["${CLAUDE_PLUGIN_ROOT}/worker/mcp.mjs"]
+      "args": ["./worker/mcp.mjs"]
     }
   }
 }

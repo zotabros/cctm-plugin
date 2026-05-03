@@ -93,7 +93,7 @@ async function reconcileOnce(state, sessionId) {
   `);
 
   const allEntries = [];
-  const tx = db.transaction(() => {
+  const insertTx = db.transaction(() => {
     for (const line of parsedLines) {
       const raw = parseAnyLine(line);
       if (raw) allEntries.push(raw);
@@ -113,12 +113,15 @@ async function reconcileOnce(state, sessionId) {
         cost, projectRow.accountId,
       );
     }
-    advanceCursor(db, sessionId, cursor.byteOffset + consumedBytes);
   });
-  tx();
+  insertTx();
 
   // Run attribution per open Turn (the most recent unreconciled Turn(s)).
   await runAttributionForOpenTurns(state, sessionId, allEntries);
+
+  // Only advance cursor after attribution succeeds — prevents data loss if
+  // attribution fails (cursor would skip entries that haven't been attributed).
+  advanceCursor(db, sessionId, cursor.byteOffset + consumedBytes);
 }
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }

@@ -15,7 +15,7 @@ export function useUrlState() {
         if (v === undefined || v === null || v === "") next.delete(k);
         else next.set(k, v);
       }
-      router.push(`${pathname}?${next.toString()}`);
+      router.replace(`${pathname}?${next.toString()}`);
     },
     [router, pathname, params]
   );

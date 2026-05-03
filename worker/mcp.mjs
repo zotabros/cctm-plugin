@@ -103,10 +103,10 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
     }
     case 'searchPrompts': {
       const limit = Math.min(Number(args.limit) || 20, 100);
-      const q = String(args.q || '');
+      const q = String(args.q || '').replace(/[%_\\]/g, '\\$&');
       const rows = db.prepare(`
         SELECT id, sessionId, ordinal, promptStartedAt, totalCostUsd, userPromptPreview
-        FROM Turn WHERE userPromptPreview LIKE ? OR userPromptHash = ?
+        FROM Turn WHERE userPromptPreview LIKE ? ESCAPE '\\' OR userPromptHash = ?
         ORDER BY promptStartedAt DESC LIMIT ?
       `).all(`%${q}%`, q, limit);
       return ok(rows);

@@ -14,12 +14,19 @@ function dbUrl(): string {
   return `file:${path}`;
 }
 
-export const prisma: PrismaClient =
-  globalThis.__prisma ??
-  new PrismaClient({
+function createPrisma() {
+  const client = new PrismaClient({
     log: process.env.NODE_ENV === "development" ? ["error", "warn"] : ["error"],
     datasources: { db: { url: dbUrl() } },
   });
+  // Match worker pragmas so Prisma doesn't busy-spin on SQLITE_BUSY.
+  // These run on every new connection via Prisma's query engine.
+  client.$executeRawUnsafe("PRAGMA journal_mode = WAL").catch(() => {});
+  client.$executeRawUnsafe("PRAGMA busy_timeout = 5000").catch(() => {});
+  return client;
+}
+
+export const prisma: PrismaClient = globalThis.__prisma ?? createPrisma();
 
 if (process.env.NODE_ENV !== "production") {
   globalThis.__prisma = prisma;

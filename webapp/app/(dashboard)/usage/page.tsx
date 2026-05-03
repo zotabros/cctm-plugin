@@ -1,7 +1,6 @@
 export const dynamic = "force-dynamic";
 
 import { auth } from "@/lib/auth";
-import { redirect } from "next/navigation";
 import { PageHeader } from "@/components/layout/PageHeader";
 import { HairlineCard } from "@/components/primitives/HairlineCard";
 import { EmptyState } from "@/components/primitives/EmptyState";
@@ -19,6 +18,7 @@ import {
 } from "@/lib/queries";
 import { parseRangeParams, rangeLabel } from "@/lib/range";
 import { formatTokens } from "@/lib/format";
+import { csv } from "@/lib/utils";
 
 interface PageProps {
   searchParams: Promise<{
@@ -36,12 +36,6 @@ interface PageProps {
 
 const VALID_GROUPBY: GroupBy[] = ["hour", "day", "week", "month"];
 const VALID_STACKBY: StackBy[] = ["model", "account", "project"];
-
-function csv(s: string | undefined): string[] | undefined {
-  if (!s) return undefined;
-  const arr = s.split(",").filter(Boolean);
-  return arr.length ? arr : undefined;
-}
 
 export default async function UsagePage({ searchParams }: PageProps) {
   const session = await auth();

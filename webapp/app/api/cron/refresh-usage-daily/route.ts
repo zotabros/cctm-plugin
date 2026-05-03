@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { NextResponse } from "next/server";
 import { refreshUsageDaily } from "@/lib/refresh-usage-daily";
 
@@ -10,7 +11,10 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "CRON_SECRET not configured" }, { status: 500 });
   }
   const auth = req.headers.get("authorization") ?? "";
-  if (auth !== `Bearer ${secret}`) {
+  const expected = `Bearer ${secret}`;
+  const isValid = auth.length === expected.length &&
+    timingSafeEqual(Buffer.from(auth), Buffer.from(expected));
+  if (!isValid) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {

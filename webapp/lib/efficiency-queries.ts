@@ -1,5 +1,6 @@
 // Local-first stub. Type-correct empty results until sqlite re-implementation.
 
+import { Prisma } from "@prisma/client";
 import { prisma } from "@/lib/db";
 import type { DateRange } from "@/lib/range";
 import type { UsageFilters } from "@/lib/queries";
@@ -70,26 +71,62 @@ export interface SessionRow {
 }
 
 export async function getSessionsList(
-  _userId: string, _range: DateRange, _filters: UsageFilters,
+  _userId: string, range: DateRange, filters: UsageFilters,
   page = 1, pageSize = 50
 ): Promise<{ rows: SessionRow[]; total: number }> {
   const skip = (page - 1) * pageSize;
-  const [sessions, total] = await Promise.all([
-    prisma.session.findMany({
-      skip, take: pageSize,
-      orderBy: { startedAt: "desc" },
-      include: { project: { include: { account: true } } },
-    }),
-    prisma.session.count(),
+  const from = range.from.toISOString();
+  const to = range.to.toISOString();
+
+  // Build dynamic WHERE clauses using Prisma tagged templates for safe parameterization.
+  // Prisma's gte/lte operators are broken with SQLite text column comparisons.
+  const conditions: Prisma.Sql[] = [
+    Prisma.sql`s.startedAt >= ${from}`,
+    Prisma.sql`s.startedAt < ${to}`,
+  ];
+
+  if (filters.accountIds?.length) {
+    conditions.push(Prisma.sql`p.accountId IN (${Prisma.join(filters.accountIds)})`);
+  }
+  if (filters.projectIds?.length) {
+    conditions.push(Prisma.sql`s.projectId IN (${Prisma.join(filters.projectIds)})`);
+  }
+  if (filters.models?.length) {
+    conditions.push(Prisma.sql`s.model IN (${Prisma.join(filters.models)})`);
+  }
+
+  const where = Prisma.join(conditions, " AND ");
+
+  const [countRows, dataRows] = await Promise.all([
+    prisma.$queryRaw<{ total: number }[]>`
+      SELECT COUNT(*) as total FROM Session s JOIN Project p ON s.projectId = p.id WHERE ${where}
+    `,
+    prisma.$queryRaw<{
+      id: string; sessionUuid: string; startedAt: string; endedAt: string | null;
+      model: string | null; accountLabel: string; accountColor: string;
+      projectName: string;
+    }[]>`
+      SELECT s.id, s.sessionUuid, s.startedAt, s.endedAt, s.model,
+             a.label as accountLabel, a.color as accountColor,
+             p.name as projectName
+      FROM Session s
+      JOIN Project p ON s.projectId = p.id
+      JOIN Account a ON p.accountId = a.id
+      WHERE ${where}
+      ORDER BY s.startedAt DESC
+      LIMIT ${pageSize} OFFSET ${skip}
+    `,
   ]);
+
+  const total = Number(countRows[0]?.total ?? 0);
   return {
-    rows: sessions.map((s) => ({
-      sessionId: s.id, sessionUuid: s.sessionUuid, startedAt: s.startedAt,
-      accountLabel: s.project.account.label, accountColor: s.project.account.color,
+    rows: dataRows.map((s) => ({
+      sessionId: s.id, sessionUuid: s.sessionUuid, startedAt: new Date(s.startedAt),
+      accountLabel: s.accountLabel, accountColor: s.accountColor,
       machineLabel: "local",
-      projectName: s.project.name, model: s.model,
+      projectName: s.projectName, model: s.model,
       turns: 0, tokens: 0, costUsd: 0,
-      durationSec: s.endedAt ? Math.max(0, (+s.endedAt - +s.startedAt) / 1000) : 0,
+      durationSec: s.endedAt ? Math.max(0, (new Date(s.endedAt).getTime() - new Date(s.startedAt).getTime()) / 1000) : 0,
     })),
     total,
   };

@@ -2,10 +2,11 @@
   "name": "cctm",
   "version": "0.2.0",
   "description": "Local-first Claude Code telemetry plugin: per-turn token & cost analytics, no cloud.",
-  "author": "zotabros",
+  "author": {
+    "name": "zotabros",
+    "email": "zotabros@gmail.com"
+  },
   "license": "MIT",
-  "hooks": "${CLAUDE_PLUGIN_ROOT}/hooks/hooks.json",
-  "mcpServers": "${CLAUDE_PLUGIN_ROOT}/.mcp.json",
-  "commands": "${CLAUDE_PLUGIN_ROOT}/commands",
-  "skills": "${CLAUDE_PLUGIN_ROOT}/skills"
+  "homepage": "https://github.com/zotabros/cctm-plugin",
+  "repository": "https://github.com/zotabros/cctm-plugin"
 }
