@@ -7,7 +7,7 @@ const os = require('node:os');
 (async () => {
   console.log('Starting CCTM dashboard...');
   try { execFileSync(process.execPath, [path.join(__dirname, 'ensure-worker.cjs')], { stdio: 'ignore' }); } catch (_) {}
-  const r = await call('POST', '/webapp/start', {}, 15000);
+  const r = await call('POST', '/webapp/start', {}, 10 * 60 * 1000);
   if (r.status !== 200 || r.body?.ok === false) {
     console.log(JSON.stringify(r.body, null, 2));
     process.exit(0);

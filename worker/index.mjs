@@ -8,7 +8,7 @@
 //   POST /webapp/start, /webapp/stop
 //   GET  /api/status
 import http from 'node:http';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { mkdirSync, writeFileSync, appendFileSync, existsSync, readFileSync, cpSync, unlinkSync } from 'node:fs';
@@ -33,6 +33,7 @@ const PORT_FILE = join(CCTM_DIR, 'worker.port');
 const PID_FILE = join(CCTM_DIR, 'worker.pid');
 const ERR_LOG = join(CCTM_DIR, 'hook-errors.log');
 const WEBAPP_PID_FILE = join(CCTM_DIR, 'webapp.pid');
+const WEBAPP_BUILD_LOG = join(CCTM_DIR, 'webapp-build.log');
 const PORT_RANGE = [39636, 39646];
 const DEFAULT_PORT = Number(process.env.CCTM_PORT) || 39636;
 
@@ -518,19 +519,48 @@ function stopWebappProcess() {
   webappState.port = null;
 }
 
+function findWebappEntry() {
+  const candidates = [
+    join(PLUGIN_ROOT, 'webapp', '.next', 'standalone', 'webapp', 'server.js'),
+    join(PLUGIN_ROOT, 'webapp', '.next', 'standalone', 'server.js'),
+  ];
+  return candidates.find((p) => existsSync(p));
+}
+
+function buildWebapp() {
+  const cwd = join(PLUGIN_ROOT, 'webapp');
+  const logHeader = `\n[${new Date().toISOString()}] Building CCTM dashboard\n`;
+  try { appendFileSync(WEBAPP_BUILD_LOG, logHeader); } catch (_) {}
+  const env = { ...process.env, NEXT_TELEMETRY_DISABLED: '1' };
+  const runner = existsSync(join(cwd, 'pnpm-lock.yaml')) ? ['pnpm', ['install', '--frozen-lockfile'], ['build']] : ['npm', ['install'], ['run', 'build']];
+  for (const args of [runner[1], runner[2]]) {
+    const r = spawnSync(runner[0], args, { cwd, env, encoding: 'utf8', timeout: 10 * 60 * 1000 });
+    try {
+      appendFileSync(WEBAPP_BUILD_LOG, `$ ${runner[0]} ${args.join(' ')}\n${r.stdout || ''}${r.stderr || ''}`);
+    } catch (_) {}
+    if (r.error || r.status !== 0) {
+      const msg = r.error?.message || `exit ${r.status}`;
+      return { ok: false, error: `${runner[0]} ${args.join(' ')} failed: ${msg}` };
+    }
+  }
+  return { ok: true };
+}
+
 function startWebapp(opts, res) {
   if (webappState.proc) return send(res, 200, { ok: true, port: webappState.port, alreadyRunning: true });
   const port = Number(opts?.port) || Number(process.env.CCTM_WEBAPP_PORT) || 3636;
   try { killProcess(Number(readFileSync(WEBAPP_PID_FILE, 'utf8').trim())); } catch (_) {}
 
-  // Next 15 standalone places server.js under standalone/<source-dir>/server.js
-  const candidates = [
-    join(PLUGIN_ROOT, 'webapp', '.next', 'standalone', 'webapp', 'server.js'),
-    join(PLUGIN_ROOT, 'webapp', '.next', 'standalone', 'server.js'),
-  ];
-  const standaloneEntry = candidates.find((p) => existsSync(p));
+  let standaloneEntry = findWebappEntry();
   if (!standaloneEntry) {
-    return send(res, 500, { ok: false, error: `webapp not built. Run pnpm --dir webapp build.` });
+    const built = buildWebapp();
+    if (!built.ok) {
+      return send(res, 500, { ok: false, error: `webapp build failed. See ${WEBAPP_BUILD_LOG}. ${built.error}` });
+    }
+    standaloneEntry = findWebappEntry();
+  }
+  if (!standaloneEntry) {
+    return send(res, 500, { ok: false, error: `webapp build completed but standalone server was not found. See ${WEBAPP_BUILD_LOG}.` });
   }
   // Copy static + public dirs into standalone (Next.js standalone doesn't include them).
   const standaloneDir = dirname(standaloneEntry);
