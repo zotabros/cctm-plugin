@@ -174,6 +174,41 @@ function waitHealthy(port, deadline, done) {
   });
 }
 
+// Wait for a stamp file matching the expected codeHash to appear — proves
+// the NEW worker we just spawned is the one writing it (not a stale legacy
+// worker on the same default port).
+function waitForFreshStamp(wantHash, deadline, done) {
+  const have = readJsonSafe(STAMP_FILE);
+  if (have && have.codeHash === wantHash && pidAlive(have.pid)) return done(true);
+  if (Date.now() > deadline) return done(false);
+  setTimeout(() => waitForFreshStamp(wantHash, deadline, done), 100);
+}
+
+// Sweep PORT_RANGE for any worker reporting a stale codeHash and kill it.
+// Covers the case where an older plugin version's worker is still bound to a
+// different port in the range.
+const PORT_RANGE = [39636, 39646];
+function reapStaleWorkers(wantHash, done) {
+  let pending = PORT_RANGE[1] - PORT_RANGE[0] + 1;
+  const finish = () => { if (--pending <= 0) done(); };
+  for (let p = PORT_RANGE[0]; p <= PORT_RANGE[1]; p++) {
+    const req = http.request({ host: '127.0.0.1', port: p, path: '/healthz', method: 'GET' }, (res) => {
+      let body = '';
+      res.on('data', (c) => body += c);
+      res.on('end', () => {
+        try {
+          const j = JSON.parse(body);
+          if (j && j.pid && j.codeHash !== wantHash) stopPid(j.pid);
+        } catch (_) {}
+        finish();
+      });
+    });
+    req.setTimeout(200, () => { try { req.destroy(); } catch (_) {} finish(); });
+    req.on('error', () => finish());
+    req.end();
+  }
+}
+
 function fireBuildAsync(port) {
   try {
     const req = http.request({ host: '127.0.0.1', port, path: '/webapp/build-async', method: 'POST' });
@@ -219,10 +254,16 @@ if (sync.inSync) {
       try { fs.unlinkSync(STAMP_FILE); } catch (_) {}
 
       if (!ensureDeps()) return finish();
+      const want = expectedStamp();
       spawnWorker();
-      waitHealthy(readPort(), Date.now() + 3000, (ok) => {
-        if (ok) fireBuildAsync(readPort());
-        finish();
+      waitForFreshStamp(want.codeHash, Date.now() + 3000, (ok) => {
+        if (!ok) return finish();
+        // New worker's stamp is up. Sweep range to remove any legacy workers
+        // that are still bound to other ports in PORT_RANGE.
+        reapStaleWorkers(want.codeHash, () => {
+          fireBuildAsync(readPort());
+          finish();
+        });
       });
     })().catch(() => finish());
   }
